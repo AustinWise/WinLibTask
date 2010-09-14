@@ -8,7 +8,9 @@ extern "C" {
 #endif
 
 #include <stdarg.h>
-#include <inttypes.h>
+#include <WinSock2.h>
+#include <Windows.h>
+#include <tchar.h>
 
 /*
  * basic procs and threads
@@ -24,7 +26,6 @@ void		taskexitall(int);
 void		taskmain(int argc, char *argv[]);
 int		taskyield(void);
 void**		taskdata(void);
-void		needstack(int);
 void		taskname(char*, ...);
 void		taskstate(char*, ...);
 char*		taskgetname(void);

@@ -45,15 +45,6 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="386-ucontext.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="amd64-ucontext.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="power-ucontext.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="task.h">
       <Filter>Header Files</Filter>
     </ClInclude>

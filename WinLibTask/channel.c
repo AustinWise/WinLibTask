@@ -9,7 +9,7 @@ chancreate(int elemsize, int bufsize)
 
 	c = malloc(sizeof *c+bufsize*elemsize);
 	if(c == nil){
-		fprint(2, "chancreate malloc: %r");
+		fprint(GetStdHandle(STD_ERROR_HANDLE), "chancreate malloc: %r");
 		exit(1);
 	}
 	memset(c, 0, sizeof *c);
@@ -109,7 +109,7 @@ altdequeue(Alt *a)
 
 	ar = chanarray(a->c, a->op);
 	if(ar == nil){
-		fprint(2, "bad use of altdequeue op=%d\n", a->op);
+		fprint(GetStdHandle(STD_ERROR_HANDLE), "bad use of altdequeue op=%d\n", a->op);
 		abort();
 	}
 
@@ -118,7 +118,7 @@ altdequeue(Alt *a)
 			delarray(ar, i);
 			return;
 		}
-	fprint(2, "cannot find self in altdq\n");
+	fprint(GetStdHandle(STD_ERROR_HANDLE), "cannot find self in altdq\n");
 	abort();
 }
 
@@ -227,7 +227,6 @@ chanalt(Alt *a)
 	Channel *c;
 	Task *t;
 
-	needstack(512);
 	for(i=0; a[i].op != CHANEND && a[i].op != CHANNOBLK; i++)
 		;
 	n = i;

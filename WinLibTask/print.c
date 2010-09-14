@@ -203,22 +203,25 @@ seprint(char *dst, char *edst, char *fmt, ...)
 }
 
 int
-vfprint(int fd, char *fmt, va_list arg)
+vfprint(HANDLE fd, char *fmt, va_list arg)
 {
 	char buf[256];
+	DWORD written = 0;
 
 	vseprint(buf, buf+sizeof buf, fmt, arg);
-	return write(fd, buf, strlen(buf));
+	if (WriteFile(fd, buf, strlen(buf), &written, 0))
+		return written;
+	return -1;
 }
 
 int
 vprint(char *fmt, va_list arg)
 {
-	return vfprint(1, fmt, arg);
+	return vfprint(GetStdHandle(STD_OUTPUT_HANDLE), fmt, arg);
 }
 
 int
-fprint(int fd, char *fmt, ...)
+fprint(HANDLE fd, char *fmt, ...)
 {
 	int n;
 	va_list arg;
