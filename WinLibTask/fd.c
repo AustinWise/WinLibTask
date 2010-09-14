@@ -1,16 +1,17 @@
 #include "taskimpl.h"
-#include <sys/poll.h>
-#include <fcntl.h>
+
+#define NET_ERRNO (WSAGetLastError())
+#define NET_EAGAIN WSAEWOULDBLOCK
 
 enum
 {
-	MAXFD = 1024
+	MAXFD = MAXIMUM_WAIT_OBJECTS
 };
 
-static struct pollfd pollfd[MAXFD];
+static HANDLE pollfd[MAXFD];
 static Task *polltask[MAXFD];
-static int npollfd;
-static int startedfdtask;
+static int npollfd = 0;
+static int startedfdtask = 0;
 static Tasklist sleeping;
 static int sleepingcounted;
 static uvlong nsec(void);
@@ -21,6 +22,7 @@ fdtask(void *v)
 	int i, ms;
 	Task *t;
 	uvlong now;
+	DWORD waitResult;
 	
 	tasksystem();
 	taskname("fdtask");
@@ -43,20 +45,31 @@ fdtask(void *v)
 			else
 				ms = 5000;
 		}
-		if(poll(pollfd, npollfd, ms) < 0){
-			if(errno == EINTR)
-				continue;
-			fprint(2, "poll: %s\n", strerror(errno));
-			taskexitall(0);
-		}
 
-		/* wake up the guys who deserve it */
-		for(i=0; i<npollfd; i++){
-			while(i < npollfd && pollfd[i].revents){
-				taskready(polltask[i]);
-				--npollfd;
-				pollfd[i] = pollfd[npollfd];
-				polltask[i] = polltask[npollfd];
+		if (npollfd == 0)
+			SleepEx(ms, TRUE);
+		else
+		{
+			waitResult = WaitForMultipleObjectsEx(npollfd, pollfd, FALSE, ms, TRUE);
+			if (waitResult == WAIT_FAILED)
+			{
+				fprint(GetStdHandle(STD_ERROR_HANDLE), "WaitForMultipleObjectsEx: %d\n", GetLastError());
+				taskexitall(0);
+			}
+
+			if (waitResult >= WAIT_OBJECT_0 && waitResult <= (WAIT_OBJECT_0 + npollfd))
+			{
+				/* wake up the guys who deserve it */
+				for(i = (waitResult - WAIT_OBJECT_0); i < npollfd; i++)
+				{
+					while(i < npollfd && WaitForSingleObject(pollfd[i], 0) == WAIT_OBJECT_0)
+					{
+						taskready(polltask[i]);
+						--npollfd;
+						pollfd[i] = pollfd[npollfd];
+						polltask[i] = polltask[npollfd];
+					}
+				}
 			}
 		}
 		
@@ -70,16 +83,22 @@ fdtask(void *v)
 	}
 }
 
+static __inline void startfdtask()
+{
+	if(!startedfdtask)
+	{
+		startedfdtask = 1;
+		taskcreate(fdtask, 0, 32768);
+	}
+}
+
 uint
 taskdelay(uint ms)
 {
 	uvlong when, now;
 	Task *t;
 	
-	if(!startedfdtask){
-		startedfdtask = 1;
-		taskcreate(fdtask, 0, 32768);
-	}
+	startfdtask();
 
 	now = nsec();
 	when = now+(uvlong)ms*1000000;
@@ -91,7 +110,7 @@ taskdelay(uint ms)
 		taskrunning->next = t;
 	}else{
 		taskrunning->prev = sleeping.tail;
-		taskrunning->next = nil;
+		taskrunning->next = (Task*)nil;
 	}
 	
 	t = taskrunning;
@@ -112,91 +131,185 @@ taskdelay(uint ms)
 	return (nsec() - now)/1000000;
 }
 
-void
-fdwait(int fd, int rw)
+void handlewait(HANDLE h)
 {
-	int bits;
+	startfdtask();
 
-	if(!startedfdtask){
-		startedfdtask = 1;
-		taskcreate(fdtask, 0, 32768);
+	if(npollfd >= MAXFD)
+	{
+		fprint(GetStdHandle(STD_ERROR_HANDLE), "too many poll file descriptors\n");
+		abort();
+	}
+	
+	polltask[npollfd] = taskrunning;
+	pollfd[npollfd] = h;
+	npollfd++;
+
+	taskswitch();
+}
+
+void
+fdwait(SOCKET fd, int rw)
+{
+	long bits;
+	HANDLE hEvent = CreateEvent(0, TRUE, FALSE, 0);
+
+	if (hEvent == NULL)
+	{
+		fprint(GetStdHandle(STD_ERROR_HANDLE), "Failed to create event.\n");
+		abort();
 	}
 
+	startfdtask();
+
 	if(npollfd >= MAXFD){
-		fprint(2, "too many poll file descriptors\n");
+		fprint(GetStdHandle(STD_ERROR_HANDLE), "too many poll file descriptors\n");
 		abort();
 	}
 	
 	taskstate("fdwait for %s", rw=='r' ? "read" : rw=='w' ? "write" : "error");
 	bits = 0;
-	switch(rw){
+	switch(rw)
+	{
 	case 'r':
-		bits |= POLLIN;
+		bits |= FD_READ;
 		break;
 	case 'w':
-		bits |= POLLOUT;
+		bits |= FD_WRITE;
 		break;
 	}
 
-	polltask[npollfd] = taskrunning;
-	pollfd[npollfd].fd = fd;
-	pollfd[npollfd].events = bits;
-	pollfd[npollfd].revents = 0;
-	npollfd++;
-	taskswitch();
-}
-
-/* Like fdread but always calls fdwait before reading. */
-int
-fdread1(int fd, void *buf, int n)
-{
-	int m;
-	
-	do
-		fdwait(fd, 'r');
-	while((m = read(fd, buf, n)) < 0 && errno == EAGAIN);
-	return m;
-}
-
-int
-fdread(int fd, void *buf, int n)
-{
-	int m;
-	
-	while((m=read(fd, buf, n)) < 0 && errno == EAGAIN)
-		fdwait(fd, 'r');
-	return m;
-}
-
-int
-fdwrite(int fd, void *buf, int n)
-{
-	int m, tot;
-	
-	for(tot=0; tot<n; tot+=m){
-		while((m=write(fd, (char*)buf+tot, n-tot)) < 0 && errno == EAGAIN)
-			fdwait(fd, 'w');
-		if(m < 0)
-			return m;
-		if(m == 0)
-			break;
+	if (WSAEventSelect(fd, hEvent, bits))
+	{
+		fprint(GetStdHandle(STD_ERROR_HANDLE), "WSAEventSelect failed.\n");
+		abort();
 	}
-	return tot;
+
+	handlewait(hEvent);
+
+	CloseHandle(hEvent);
+}
+
+static VOID CALLBACK iodone(DWORD dwErrorCode, DWORD dwNumberOfBytesTransfered, LPOVERLAPPED lpOverlapped)
+{
+	taskready((Task*)lpOverlapped->hEvent);
+}
+
+FD*		taskopen(
+  __in      LPCTSTR lpFileName,
+  __in      DWORD dwDesiredAccess,
+  __in      DWORD dwShareMode,
+  __in      DWORD dwCreationDisposition,
+  __in      DWORD dwFlagsAndAttributes
+)
+{
+	FD *fd = (FD*)calloc(1, sizeof(FD));
+	if (fd == NULL)
+		return 0;
+
+	fd->h = CreateFile(lpFileName, dwDesiredAccess, dwShareMode, 0, dwCreationDisposition,
+		FILE_FLAG_OVERLAPPED | dwFlagsAndAttributes, 0);
+
+	if (fd->h == INVALID_HANDLE_VALUE)
+	{
+		free(fd);
+		return 0;
+	}
+
+	return fd;
 }
 
 int
-fdnoblock(int fd)
+fdread(FD* fd, void *buf, int n)
 {
-	return fcntl(fd, F_SETFL, fcntl(fd, F_GETFL)|O_NONBLOCK);
+	fd->o.Internal = 0;
+	fd->o.InternalHigh = 0;
+	fd->o.hEvent = taskrunning;
+
+	if (!ReadFileEx(fd->h, buf, n, &fd->o, &iodone))
+		return -1;
+	else if (GetLastError() != ERROR_SUCCESS)
+		return -1;
+	
+	startfdtask();
+	taskswitch();
+
+	if (fd->o.Internal == ERROR_SUCCESS)
+	{
+		INT64 off = fd->o.OffsetHigh << 16;
+		off <<= 16;
+		off |= fd->o.Offset;
+		off += fd->o.InternalHigh;
+
+		fd->o.OffsetHigh = (off >> 32) & 0xffffffff;
+		fd->o.Offset = off & 0xffffffff;
+
+		return fd->o.InternalHigh;
+	}
+	else
+	{
+		int asdf = ERROR_HANDLE_EOF;
+		DWORD err = GetLastError();
+		return -1;
+	}
+}
+
+int
+fdwrite(FD* fd, void *buf, int n)
+{
+	fd->o.hEvent = taskrunning;
+
+	if (!WriteFileEx(fd->h, buf, n, &fd->o, &iodone))
+		return -1;
+	else if (GetLastError() != ERROR_SUCCESS)
+		return -1;
+	
+	startfdtask();
+	taskswitch();
+
+	if (fd->o.Internal == ERROR_SUCCESS)
+		return fd->o.InternalHigh;
+	else
+		return -1;
+}
+
+//
+//int
+//fdsend(SOCKET fd, void *buf, int n)
+//{
+//    int m, tot;
+//    
+//    for(tot = 0; tot < n; tot += m){
+//        while((m=send(fd, (char*)buf+tot, n-tot, 0)) < 0 && WSAGetLastError() == WSAEWOULDBLOCK) {
+//            if(fdwait(fd, 'w') == -1) {
+//                return -1;
+//            }
+//        }
+//
+//        if(m < 0) return m;
+//        if(m == 0) break;
+//    }
+//
+//    return tot;
+//}
+
+int
+fdnoblock(SOCKET fd)
+{
+	u_long iMode = 1;
+	return ioctlsocket(fd, FIONBIO, &iMode);
 }
 
 static uvlong
 nsec(void)
 {
-	struct timeval tv;
+	FILETIME ft;
+	uvlong ret;
 
-	if(gettimeofday(&tv, 0) < 0)
-		return -1;
-	return (uvlong)tv.tv_sec*1000*1000*1000 + tv.tv_usec*1000;
+	GetSystemTimeAsFileTime(&ft);
+
+    ret = ((uvlong)ft.dwHighDateTime) << 32;
+	ret |= ft.dwLowDateTime;
+	return ret * 100;
 }
 

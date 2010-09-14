@@ -150,14 +150,26 @@ int		chansend(Channel *c, void *v);
 int		chansendp(Channel *c, void *v);
 int		chansendul(Channel *c, unsigned long v);
 
+typedef struct FD
+{
+	HANDLE h;
+	OVERLAPPED o;
+} FD;
+
 /*
  * Threaded I/O.
  */
-int		fdread(int, void*, int);
-int		fdread1(int, void*, int);	/* always uses fdwait */
-int		fdwrite(int, void*, int);
-void		fdwait(int, int);
-int		fdnoblock(int);
+FD*		taskopen(  __in      LPCTSTR lpFileName,
+  __in      DWORD dwDesiredAccess,
+  __in      DWORD dwShareMode,
+  __in      DWORD dwCreationDisposition,
+  __in      DWORD dwFlagsAndAttributes
+);
+int		fdread(FD*, void*, int);
+int		fdwrite(FD*, void*, int);
+void	fdwait(SOCKET, int);
+void	handlewait(HANDLE h);
+int		fdnoblock(SOCKET);
 
 void		fdtask(void*);
 
@@ -170,11 +182,10 @@ enum
 	TCP = 1,
 };
 
-int		netannounce(int, char*, int);
-int		netaccept(int, char*, int*);
-int		netdial(int, char*, int);
-int		netlookup(char*, uint32_t*);	/* blocks entire program! */
-int		netdial(int, char*, int);
+SOCKET		netannounce(int, char*, int);
+SOCKET		netaccept(SOCKET, char*, int*);
+SOCKET		netdial(int, char*, int);
+int		netlookup(char*, unsigned int*);	/* blocks entire program! */
 
 #ifdef __cplusplus
 }

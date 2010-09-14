@@ -1,18 +1,15 @@
 #include "taskimpl.h"
 #include <sys/types.h>
-#include <sys/socket.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <sys/poll.h>
+typedef int socklen_t;
+#define close(someFd) closesocket(someFd)
 
-int
+SOCKET
 netannounce(int istcp, char *server, int port)
 {
 	int fd, n, proto;
 	struct sockaddr_in sa;
 	socklen_t sn;
-	uint32_t ip;
+	unsigned int ip;
 
 	taskstate("netannounce");
 	proto = istcp ? SOCK_STREAM : SOCK_DGRAM;
@@ -32,7 +29,7 @@ netannounce(int istcp, char *server, int port)
 	}
 	
 	/* set reuse flag for tcp */
-	if(istcp && getsockopt(fd, SOL_SOCKET, SO_TYPE, (void*)&n, &sn) >= 0){
+	if(istcp && getsockopt(fd, SOL_SOCKET, SO_TYPE, (char*)&n, &sn) >= 0){
 		n = 1;
 		setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char*)&n, sizeof n);
 	}
@@ -51,8 +48,8 @@ netannounce(int istcp, char *server, int port)
 	return fd;
 }
 
-int
-netaccept(int fd, char *server, int *port)
+SOCKET
+netaccept(SOCKET fd, char *server, int *port)
 {
 	int cfd, one;
 	struct sockaddr_in sa;
@@ -82,7 +79,7 @@ netaccept(int fd, char *server, int *port)
 
 #define CLASS(p) ((*(unsigned char*)(p))>>6)
 static int
-parseip(char *name, uint32_t *ip)
+parseip(char *name, unsigned int *ip)
 {
 	unsigned char addr[4];
 	char *p;
@@ -122,12 +119,12 @@ parseip(char *name, uint32_t *ip)
 			return -1;
 		break;
 	}
-	*ip = *(uint32_t*)addr;
+	*ip = *(unsigned int*)addr;
 	return 0;
 }
 
 int
-netlookup(char *name, uint32_t *ip)
+netlookup(char *name, unsigned int *ip)
 {
 	struct hostent *he;
 
@@ -137,7 +134,7 @@ netlookup(char *name, uint32_t *ip)
 	/* BUG - Name resolution blocks.  Need a non-blocking DNS. */
 	taskstate("netlookup");
 	if((he = gethostbyname(name)) != 0){
-		*ip = *(uint32_t*)he->h_addr;
+		*ip = *(unsigned int*)he->h_addr;
 		taskstate("netlookup succeeded");
 		return 0;
 	}
@@ -146,11 +143,11 @@ netlookup(char *name, uint32_t *ip)
 	return -1;
 }
 
-int
+SOCKET
 netdial(int istcp, char *server, int port)
 {
 	int proto, fd, n;
-	uint32_t ip;
+	unsigned int ip;
 	struct sockaddr_in sa;
 	socklen_t sn;
 	
@@ -168,7 +165,7 @@ netdial(int istcp, char *server, int port)
 	/* for udp */
 	if(!istcp){
 		n = 1;
-		setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &n, sizeof n);
+		setsockopt(fd, SOL_SOCKET, SO_BROADCAST, (char*)&n, sizeof n);
 	}
 	
 	/* start connecting */
